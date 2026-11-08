@@ -73,7 +73,6 @@
   .badge.in{background:#dcfce7;color:var(--green)} .badge.out{background:#fee2e2;color:var(--red)}
   .tools{display:flex;gap:8px;flex-wrap:wrap}
 
-  /* ===== Pencarian nama ===== */
   .searchbox{display:flex;align-items:center;gap:8px;background:#fff;border-radius:16px;padding:4px 10px 4px 14px;margin-bottom:14px;box-shadow:var(--shadow);border:1.5px solid transparent;transition:border-color .15s}
   .searchbox:focus-within{border-color:var(--primary)}
   .searchbox input{border:none;box-shadow:none !important;padding:10px 4px;background:transparent}
@@ -81,7 +80,6 @@
   .searchbox .sclear{background:#fdeaf1;color:var(--primary-dark);padding:4px 9px;border-radius:999px;font-size:12px;box-shadow:none}
   mark{background:#fbcfe8;color:inherit;border-radius:4px;padding:0 1px}
 
-  /* ===== Halaman awal (daftar kelas) ===== */
   .home-title{margin:18px 4px 12px;font-size:15px;color:var(--muted);font-weight:500}
   .class-grid{display:grid;grid-template-columns:1fr;gap:14px}
   @media(min-width:560px){.class-grid{grid-template-columns:1fr 1fr}}
@@ -102,9 +100,7 @@
 <body>
 
 <header id="header"></header>
-
 <div class="tabs" id="tabs" style="display:none"></div>
-
 <main id="main"></main>
 
 <!-- Modal input pembayaran -->
@@ -113,495 +109,67 @@
     <h3 id="mName">Nama</h3>
     <div style="font-size:13px;color:var(--muted)" id="mMonth"></div>
     <div class="hint">Tulis jumlah, misal <b>5k</b>, <b>2000</b>, atau <b>1.5k</b>. 1 centang = Rp 2.000.</div>
-    <input id="mInput" placeholder="contoh: 5k" inputmode="text" autocomplete="off">
-    <div class="preview" id="mPreview"></div>
+    <input id="mInput" placeholder="contoh: 5k" type="text">
+    <div class="preview" id="mPreview">Input valid: -</div>
     <div class="actions">
-      <button class="btn danger" id="mClear">Hapus</button>
-      <button class="btn ghost" id="mCancel">Batal</button>
-      <button class="btn" id="mSave">Simpan</button>
-    </div>
-  </div>
-</div>
-
-<!-- Modal kelas (tambah / ubah nama) -->
-<div class="modal-bg" id="classModalBg">
-  <div class="modal">
-    <h3 id="cmTitle">Tambah Kelas</h3>
-    <div class="hint">Setiap kelas punya uang kas sendiri, jadi tidak akan tercampur.</div>
-    <input id="cmInput" placeholder="contoh: XI IPA 1" autocomplete="off">
-    <div class="actions">
-      <button class="btn ghost" id="cmCancel">Batal</button>
-      <button class="btn" id="cmSave">Simpan</button>
+      <button class="btn ghost" onclick="closeModal()">Batal</button>
+      <button class="btn" onclick="savePayment()">Simpan</button>
     </div>
   </div>
 </div>
 
 <script>
-/* ====== PENGATURAN ====== */
-const START_YEAR = 2026;          // Agustus START_YEAR s/d Juli START_YEAR+1
-const CHECK_VALUE = 2000;         // nilai 1 centang
-const STORAGE_KEY = 'uang-kas-kelas-v2';
-const OLD_KEY = 'uang-kas-kelas-v1';
-
-const BULAN = ['Agustus','September','Oktober','November','Desember','Januari','Februari','Maret','April','Mei','Juni','Juli'];
-const bulanLabel = i => `${BULAN[i]} ${i < 5 ? START_YEAR : START_YEAR + 1}`;
-
-/* ====== DATA ======
-   db = { classes: [ { id, name, students:[{id,name}], pay:{bulan:{siswa:jumlah}}, notes:{bulan:[{id,name,amount,type}]} } ] }
-*/
-let db = load();
-let data = null;        // kelas yang sedang dibuka
-function load(){
-  try{
-    const d = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if(d && Array.isArray(d.classes)) return d;
-  }catch(e){}
-  // migrasi dari versi lama (satu kelas saja)
-  try{
-    const o = JSON.parse(localStorage.getItem(OLD_KEY));
-    if(o && o.students && (o.students.length || Object.keys(o.pay||{}).length)){
-      return { classes:[{ id:uid(), name:o.className || 'Kelas 1', students:o.students, pay:o.pay||{}, notes:o.notes||{} }] };
+  // Data State Manajemen Aplikasi
+  let activeClass = null;
+  let activeTab = 'pembayaran';
+  
+  // Data Dummy Awal
+  let dataKelas = JSON.parse(localStorage.getItem('kas_kelas_data')) || [
+    {
+      id: 'kelas-1',
+      nama: 'Kelas XII RPL 1',
+      siswa: ['Andi', 'Budi', 'Citra', 'Dewi', 'Eko'],
+      pembayaran: {
+        'Andi': { 'Januari': 4000, 'Februari': 2000 },
+        'Budi': { 'Januari': 2000 },
+        'Citra': { 'Januari': 6000 }
+      },
+      pengeluaran: [
+        { keperluan: 'Beli Sapu', jumlah: 15000, tanggal: '2026-01-10' }
+      ]
     }
-  }catch(e){}
-  return { classes:[] };
-}
-function save(){ try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); }catch(e){} }
+  ];
 
-/* ====== UTIL ====== */
-const rp = n => 'Rp ' + Math.round(n).toLocaleString('id-ID');
-function uid(){ return Math.random().toString(36).slice(2,9); }
-const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-function parseAmount(str){
-  str = String(str).trim().toLowerCase().replace(/rp/g,'').replace(/\s+/g,'');
-  if(!str) return null;
-  let m = str.match(/^([\d.,]+)(k|rb|ribu)$/);
-  if(m){
-    const v = parseFloat(m[1].replace(',', '.'));
-    return isNaN(v) ? null : Math.round(v*1000);
+  function saveData() {
+    localStorage.setItem('kas_kelas_data', JSON.stringify(dataKelas));
   }
-  m = str.match(/^[\d.,]+$/);
-  if(m){
-    const v = parseInt(str.replace(/[.,]/g,''),10);
-    return isNaN(v) ? null : v;
+
+  function formatRupiah(angka) {
+    return 'Rp ' + parseInt(angka).toLocaleString('id-ID');
   }
-  return null;
-}
 
-function checkParts(amount){
-  const c = Math.floor(amount / CHECK_VALUE);
-  const r = amount - c*CHECK_VALUE;
-  return {c, r};
-}
-
-function payTotal(mi, d = data){
-  const p = d.pay[mi] || {};
-  return Object.values(p).reduce((a,b)=>a+b,0);
-}
-function noteTotals(mi, d = data){
-  const n = d.notes[mi] || [];
-  let inn=0,out=0;
-  n.forEach(x => x.type==='in' ? inn+=x.amount : out+=x.amount);
-  return {inn,out};
-}
-function monthSummary(mi, d = data){
-  const kas = payTotal(mi, d);
-  const {inn,out} = noteTotals(mi, d);
-  return {kas, inn, out, saldo: kas + inn - out};
-}
-function classSaldo(d){
-  let s = 0;
-  for(let i=0;i<12;i++) s += monthSummary(i,d).saldo;
-  return s;
-}
-
-/* ====== STATE UI ====== */
-let activeTab = 'm0';   // m0..m11 atau 'recap' atau 'siswa'
-let openRecapMonth = null;
-let searchQ = '';       // kata kunci pencarian nama siswa
-
-function defaultMonthTab(){
-  const now = new Date();
-  const m = now.getMonth(), y = now.getFullYear();
-  const idx = m >= 7 ? m-7 : m+5;
-  const yr = m >= 7 ? y : y-1;
-  return yr === START_YEAR ? 'm'+idx : 'm0';
-}
-
-/* ====== RENDER UTAMA ====== */
-function render(){
-  if(!data) renderHome();
-  else renderClass();
-}
-
-/* ====== HALAMAN AWAL ====== */
-function renderHome(){
-  const header = document.getElementById('header');
-  header.innerHTML = `<h1>💰 Uang Kas</h1><small>Pilih kelas atau tambah kelas baru</small>`;
-  document.getElementById('tabs').style.display = 'none';
-
-  const plusCount = Math.max(1, 2 - db.classes.length);
-  const cards = db.classes.map(c=>{
-    const stu = c.students.length;
-    return `<div class="class-card" data-open="${c.id}">
-      <div class="acts">
-        <button data-edit="${c.id}" title="Ubah nama">✏️</button>
-        <button data-del="${c.id}" title="Hapus kelas">🗑️</button>
-      </div>
-      <div>
-        <h3>${esc(c.name)}</h3>
-        <div class="meta">${stu} siswa</div>
-      </div>
-      <div class="saldo"><small>Total kas</small>${rp(classSaldo(c))}</div>
-    </div>`;
-  }).join('');
-  const plus = Array.from({length:plusCount}).map(()=>
-    `<div class="add-card" data-add="1"><div class="plus">+</div><span>Tambah kelas</span></div>`).join('');
-
-  document.getElementById('main').innerHTML = `
-    <div class="home-title">${db.classes.length ? 'Kelas kamu' : 'Belum ada kelas. Klik + untuk mulai.'}</div>
-    <div class="class-grid">${cards}${plus}</div>
-    <div class="card tools" style="margin-top:20px">
-      <button class="btn ghost" id="btnExport">⬇️ Backup semua data</button>
-      <button class="btn ghost" id="btnImport">⬆️ Restore data</button>
-      <input type="file" id="fileImport" accept=".json" style="display:none">
-    </div>`;
-
-  const main = document.getElementById('main');
-  main.querySelectorAll('[data-open]').forEach(el=>el.onclick=()=>openClass(el.dataset.open));
-  main.querySelectorAll('[data-add]').forEach(el=>el.onclick=()=>openClassModal(null));
-  main.querySelectorAll('[data-edit]').forEach(el=>el.onclick=e=>{ e.stopPropagation(); openClassModal(el.dataset.edit); });
-  main.querySelectorAll('[data-del]').forEach(el=>el.onclick=e=>{
-    e.stopPropagation();
-    const c = db.classes.find(x=>x.id===el.dataset.del);
-    if(confirm(`Hapus kelas "${c.name}" beserta semua datanya? Ini tidak bisa dibatalkan.`)){
-      db.classes = db.classes.filter(x=>x.id!==c.id);
-      save(); render();
+  function parseInput(val) {
+    val = val.toLowerCase().replace(/,/g, '.').trim();
+    if(val.endsWith('k')) {
+      let num = parseFloat(val.slice(0, -1));
+      return isNaN(num) ? 0 : num * 1000;
     }
-  });
-  document.getElementById('btnExport').onclick = exportData;
-  document.getElementById('btnImport').onclick = ()=>document.getElementById('fileImport').click();
-  document.getElementById('fileImport').onchange = importData;
-}
-
-function openClass(id){
-  data = db.classes.find(c=>c.id===id);
-  activeTab = defaultMonthTab();
-  openRecapMonth = null;
-  searchQ = '';
-  window.scrollTo(0,0);
-  render();
-}
-function backHome(){
-  data = null;
-  window.scrollTo(0,0);
-  render();
-}
-
-/* ====== MODAL KELAS ====== */
-const cBg = document.getElementById('classModalBg');
-const cInp = document.getElementById('cmInput');
-let editingClass = null;
-function openClassModal(id){
-  editingClass = id;
-  const c = id ? db.classes.find(x=>x.id===id) : null;
-  document.getElementById('cmTitle').textContent = c ? 'Ubah Nama Kelas' : 'Tambah Kelas';
-  cInp.value = c ? c.name : '';
-  cBg.classList.add('show');
-  setTimeout(()=>cInp.focus(),50);
-}
-function closeClassModal(){ cBg.classList.remove('show'); editingClass = null; }
-document.getElementById('cmCancel').onclick = closeClassModal;
-cBg.onclick = e => { if(e.target===cBg) closeClassModal(); };
-cInp.onkeydown = e => { if(e.key==='Enter') document.getElementById('cmSave').click(); };
-document.getElementById('cmSave').onclick = ()=>{
-  const name = cInp.value.trim();
-  if(!name){ alert('Isi nama kelas dulu ya'); return; }
-  if(editingClass){
-    db.classes.find(x=>x.id===editingClass).name = name;
-    save(); closeClassModal(); render();
-  } else {
-    const c = { id:uid(), name, students:[], pay:{}, notes:{} };
-    db.classes.push(c);
-    save(); closeClassModal();
-    openClass(c.id);
-    activeTab = 'siswa'; render();   // langsung isi daftar siswa
+    let num = parseInt(val.replace(/\./g, ''));
+    return isNaN(num) ? 0 : num;
   }
-};
 
-/* ====== HALAMAN KELAS ====== */
-function renderClass(){
-  document.getElementById('header').innerHTML = `
-    <button class="back" id="btnBack">← Semua kelas</button>
-    <h1>💰 ${esc(data.name)}</h1>
-    <div><small>Periode Agustus ${START_YEAR} – Juli ${START_YEAR+1}</small></div>`;
-  document.getElementById('btnBack').onclick = backHome;
-  renderTabs();
-  if(activeTab==='recap') renderRecap();
-  else if(activeTab==='siswa') renderStudents();
-  else renderMonth(parseInt(activeTab.slice(1)));
-}
-
-function renderTabs(){
-  const t = document.getElementById('tabs');
-  t.style.display = 'flex';
-  t.innerHTML = BULAN.map((b,i)=>`<div class="tab ${activeTab==='m'+i?'active':''}" data-tab="m${i}">${b.slice(0,3)}</div>`).join('')
-    + `<div class="tab recap ${activeTab==='recap'?'active':''}" data-tab="recap">📊 Recap</div>`
-    + `<div class="tab ${activeTab==='siswa'?'active':''}" data-tab="siswa">👥 Siswa</div>`;
-  t.querySelectorAll('.tab').forEach(el=>el.onclick=()=>{
-    activeTab = el.dataset.tab; renderClass();
-    const act = document.querySelector('.tab.active');
-    if(act) act.scrollIntoView({inline:'center',block:'nearest'});
-  });
-  const act = t.querySelector('.tab.active');
-  if(act) t.scrollLeft = act.offsetLeft - t.clientWidth/2 + act.clientWidth/2;
-}
-
-function renderMonth(mi){
-  const main = document.getElementById('main');
-  const pay = data.pay[mi] || {};
-  const paid = data.students.filter(s => pay[s.id] > 0).length;
-  const total = payTotal(mi);
-
-  let html = `<div class="card"><h2 style="margin:0 0 10px">${bulanLabel(mi)}</h2>
-    <div class="summary">
-      <div class="stat"><span>Terkumpul bulan ini</span><b>${rp(total)}</b></div>
-      <div class="stat"><span>Sudah bayar</span><b>${paid} / ${data.students.length}</b></div>
-    </div></div>`;
-
-  if(!data.students.length){
-    html += `<div class="card empty">Belum ada siswa.<br><br><button class="btn" onclick="activeTab='siswa';renderClass()">Tambah daftar siswa</button></div>`;
-    main.innerHTML = html;
-    return;
-  }
-  html += `<div class="searchbox">
-      <span>🔍</span>
-      <input id="searchInput" type="search" placeholder="Cari nama siswa..." autocomplete="off" value="${esc(searchQ)}">
-      <button id="searchClear" class="sclear" style="display:${searchQ?'block':'none'}">✕</button>
-    </div>
-    <div class="card" id="studentList"></div>`;
-  main.innerHTML = html;
-
-  const listEl = document.getElementById('studentList');
-  const sInp = document.getElementById('searchInput');
-  const sClr = document.getElementById('searchClear');
-
-  function drawList(){
-    const q = searchQ.trim().toLowerCase();
-    const rows = data.students
-      .map((s,i)=>({s,i}))
-      .filter(x => !q || x.s.name.toLowerCase().includes(q));
-    if(!rows.length){
-      listEl.innerHTML = `<div class="empty">Tidak ada nama yang cocok dengan "<b>${esc(searchQ.trim())}</b>"</div>`;
-      return;
-    }
-    listEl.innerHTML = rows.map(({s,i})=>{
-      const a = pay[s.id] || 0;
-      const {c,r} = checkParts(a);
-      let nameHtml = esc(s.name);
-      if(q){
-        const idx = s.name.toLowerCase().indexOf(q);
-        nameHtml = esc(s.name.slice(0,idx)) + '<mark>' + esc(s.name.slice(idx, idx+q.length)) + '</mark>' + esc(s.name.slice(idx+q.length));
-      }
-      return `<div class="row" data-id="${s.id}">
-        <div class="no">${i+1}</div>
-        <div class="nm">${nameHtml}</div>
-        <div class="checks">${'✓'.repeat(c)}</div>
-        <div class="rem">${r? r : ''}</div>
-        <div class="tot">${a? rp(a) : '<span style="opacity:.4">—</span>'}</div>
-      </div>`;
-    }).join('');
-    listEl.querySelectorAll('.row').forEach(el=>el.onclick=()=>openModal(mi, el.dataset.id));
-  }
-  drawList();
-
-  sInp.oninput = ()=>{
-    searchQ = sInp.value;
-    sClr.style.display = searchQ ? 'block' : 'none';
-    drawList();
-  };
-  sClr.onclick = ()=>{ searchQ = ''; sInp.value = ''; sClr.style.display = 'none'; drawList(); sInp.focus(); };
-}
-
-function renderRecap(){
-  const main = document.getElementById('main');
-  let g = {kas:0,inn:0,out:0,saldo:0};
-  let rows = BULAN.map((_,i)=>{
-    const s = monthSummary(i);
-    g.kas+=s.kas; g.inn+=s.inn; g.out+=s.out; g.saldo+=s.saldo;
-    const open = openRecapMonth===i;
-    return `<tr class="month ${open?'open':''}" data-m="${i}">
-      <td>${open?'▾':'▸'} ${bulanLabel(i)}</td>
-      <td>${rp(s.kas)}</td>
-      <td class="pos">${s.inn? '+'+rp(s.inn):'-'}</td>
-      <td class="neg">${s.out? '-'+rp(s.out):'-'}</td>
-      <td><b>${rp(s.saldo)}</b></td>
-    </tr>` + (open ? `<tr><td colspan="5" style="text-align:left;background:#fff9fb">${notesPanel(i)}</td></tr>` : '');
-  }).join('');
-
-  main.innerHTML = `
-    <div class="card">
-      <div class="summary">
-        <div class="stat"><span>Total seluruh kas</span><b class="${g.saldo<0?'neg':''}">${rp(g.saldo)}</b></div>
-        <div class="stat"><span>Kas masuk (iuran)</span><b>${rp(g.kas)}</b></div>
-        <div class="stat"><span>Penambahan</span><b class="pos">${rp(g.inn)}</b></div>
-        <div class="stat"><span>Pengeluaran</span><b class="neg">${rp(g.out)}</b></div>
-      </div>
-    </div>
-    <div class="card" style="overflow-x:auto">
-      <div style="font-size:13px;color:var(--muted);margin-bottom:6px">Klik nama bulan untuk melihat / menulis catatan pengeluaran atau penambahan.</div>
-      <table>
-        <thead><tr><th>Bulan</th><th>Iuran</th><th>Tambah</th><th>Keluar</th><th>Saldo</th></tr></thead>
-        <tbody>${rows}
-          <tr class="grand"><td>TOTAL</td><td>${rp(g.kas)}</td><td class="pos">${rp(g.inn)}</td><td class="neg">${rp(g.out)}</td><td>${rp(g.saldo)}</td></tr>
-        </tbody>
-      </table>
-    </div>`;
-
-  main.querySelectorAll('tr.month').forEach(tr=>tr.onclick=()=>{
-    const i = parseInt(tr.dataset.m);
-    openRecapMonth = openRecapMonth===i ? null : i;
-    renderRecap();
-  });
-  bindNotes();
-}
-
-function notesPanel(mi){
-  const list = data.notes[mi] || [];
-  const {inn,out} = noteTotals(mi);
-  return `<div data-notes="${mi}">
-    <b>Catatan ${bulanLabel(mi)}</b>
-    <div class="note-form">
-      <input class="nn" placeholder="Nama (mis. Beli spidol)">
-      <input class="na" placeholder="Jumlah (mis. 15k)">
-      <select class="nt"><option value="out">Pengeluaran</option><option value="in">Penambahan</option></select>
-      <button class="btn nadd">Tambah</button>
-    </div>
-    ${list.length ? list.map(x=>`
-      <div class="note">
-        <span class="badge ${x.type}">${x.type==='in'?'Tambah':'Keluar'}</span>
-        <div class="n">${esc(x.name)}</div>
-        <b class="${x.type==='in'?'pos':'neg'}">${x.type==='in'?'+':'-'}${rp(x.amount)}</b>
-        <button class="del" data-del="${x.id}">✕</button>
-      </div>`).join('') : '<div style="color:var(--muted);padding:8px 0">Belum ada catatan.</div>'}
-    <div style="margin-top:8px;font-size:13px;color:var(--muted)">Total tambahan: <b class="pos">${rp(inn)}</b> · Total pengeluaran: <b class="neg">${rp(out)}</b></div>
-  </div>`;
-}
-
-function bindNotes(){
-  document.querySelectorAll('[data-notes]').forEach(box=>{
-    const mi = parseInt(box.dataset.notes);
-    box.onclick = e => e.stopPropagation();
-    box.querySelector('.nadd').onclick = ()=>{
-      const name = box.querySelector('.nn').value.trim();
-      const amt = parseAmount(box.querySelector('.na').value);
-      const type = box.querySelector('.nt').value;
-      if(!name){ alert('Isi nama dulu ya'); return; }
-      if(amt===null || amt<=0){ alert('Jumlah tidak valid. Contoh: 15k atau 15000'); return; }
-      (data.notes[mi] = data.notes[mi] || []).push({id:uid(), name, amount:amt, type});
-      save(); renderRecap();
-    };
-    box.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{
-      data.notes[mi] = (data.notes[mi]||[]).filter(x=>x.id!==b.dataset.del);
-      save(); renderRecap();
-    });
-  });
-}
-
-function renderStudents(){
-  const main = document.getElementById('main');
-  main.innerHTML = `
-    <div class="card">
-      <h2 style="margin-top:0">Daftar Siswa</h2>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Tulis satu nama per baris. Menghapus nama juga menghapus riwayat bayarnya.</div>
-      <textarea id="names" style="min-height:260px">${esc(data.students.map(s=>s.name).join('\n'))}</textarea>
-      <div style="margin-top:10px"><button class="btn" id="saveNames">Simpan daftar</button></div>
-    </div>`;
-  document.getElementById('saveNames').onclick = ()=>{
-    const names = document.getElementById('names').value.split('\n').map(s=>s.trim()).filter(Boolean);
-    const old = [...data.students];
-    const used = new Set();
-    const next = names.map(n=>{
-      const found = old.find(o=>o.name===n && !used.has(o.id));
-      if(found){ used.add(found.id); return found; }
-      return {id:uid(), name:n};
-    });
-    const keep = new Set(next.map(s=>s.id));
-    Object.keys(data.pay).forEach(m=>{
-      Object.keys(data.pay[m]).forEach(id=>{ if(!keep.has(id)) delete data.pay[m][id]; });
-    });
-    data.students = next;
-    save();
-    activeTab = defaultMonthTab(); renderClass();
-  };
-}
-
-/* ====== MODAL PEMBAYARAN ====== */
-let cur = null;
-const bg = document.getElementById('modalBg');
-const inp = document.getElementById('mInput');
-function openModal(mi, sid){
-  const s = data.students.find(x=>x.id===sid);
-  cur = {mi, sid};
-  document.getElementById('mName').textContent = s.name;
-  document.getElementById('mMonth').textContent = bulanLabel(mi);
-  const a = (data.pay[mi]||{})[sid];
-  inp.value = a ? a : '';
-  updatePreview();
-  bg.classList.add('show');
-  setTimeout(()=>inp.focus(),50);
-}
-function closeModal(){ bg.classList.remove('show'); cur=null; }
-function updatePreview(){
-  const v = parseAmount(inp.value);
-  const el = document.getElementById('mPreview');
-  if(inp.value.trim()==='' ) { el.innerHTML = '<span style="color:var(--muted)">Belum ada jumlah</span>'; return; }
-  if(v===null){ el.innerHTML = '<span class="neg">Format tidak dikenali</span>'; return; }
-  const {c,r} = checkParts(v);
-  el.innerHTML = `<span class="checks">${'✓'.repeat(c)}</span> <span class="rem">${r||''}</span><div style="font-size:13px;color:var(--muted)">${rp(v)}</div>`;
-}
-inp.oninput = updatePreview;
-inp.onkeydown = e => { if(e.key==='Enter') document.getElementById('mSave').click(); };
-document.getElementById('mCancel').onclick = closeModal;
-bg.onclick = e => { if(e.target===bg) closeModal(); };
-document.getElementById('mClear').onclick = ()=>{
-  if(data.pay[cur.mi]) delete data.pay[cur.mi][cur.sid];
-  save(); closeModal(); renderClass();
-};
-document.getElementById('mSave').onclick = ()=>{
-  const v = parseAmount(inp.value);
-  if(inp.value.trim()===''){ document.getElementById('mClear').click(); return; }
-  if(v===null){ alert('Format tidak dikenali. Contoh: 5k, 2000, 1.5k'); return; }
-  (data.pay[cur.mi] = data.pay[cur.mi] || {})[cur.sid] = v;
-  save(); closeModal(); renderClass();
-};
-
-/* ====== BACKUP ====== */
-function exportData(){
-  const blob = new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'backup-uang-kas.json';
-  a.click();
-}
-function importData(e){
-  const f = e.target.files[0]; if(!f) return;
-  const r = new FileReader();
-  r.onload = ()=>{
-    try{
-      let d = JSON.parse(r.result);
-      if(d && d.students && d.pay){           // backup dari versi lama (satu kelas)
-        d = { classes:[{ id:uid(), name:d.className || 'Kelas 1', students:d.students, pay:d.pay, notes:d.notes||{} }] };
-      }
-      if(!d || !Array.isArray(d.classes)) throw 0;
-      if(db.classes.length && !confirm('Data yang ada sekarang akan diganti dengan isi backup. Lanjut?')) return;
-      db = d; save(); data = null; render(); alert('Data berhasil dipulihkan');
-    }catch(err){ alert('File backup tidak valid'); }
-  };
-  r.readAsText(f);
-}
-
-render();
-</script>
-</body>
-</html>
+  // Render Halaman Utama (Daftar Kelas)
+  function renderHome() {
+    activeClass = null;
+    document.getElementById('tabs').style.display = 'none';
+    
+    let header = document.getElementById('header');
+    header.innerHTML = `<h1>Uang Kas Kelas</h1><small>Manajemen kas kelas praktis & mudah</small>`;
+    
+    let main = document.getElementById('main');
+    let html = `<div class="home-title">Daftar Kelas Kamu</div><div class="class-grid">`;
+    
+    dataKelas.forEach(c => {
+      // Hitung Total Kas
+      let totalMasuk = 0;
+                  
